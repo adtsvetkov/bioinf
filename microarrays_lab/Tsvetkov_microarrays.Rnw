@@ -1,0 +1,491 @@
+\documentclass{article}
+\usepackage{lmodern}
+\oddsidemargin=0cm
+\textwidth=17cm
+
+\usepackage{hyperref}
+\usepackage[english, russian]{babel}
+\hypersetup{pdfstartview=FitH,  linkcolor=blue, urlcolor=blue, colorlinks=true}
+
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{graphicx}
+\usepackage{float} 
+\newcommand{\myPictWidth}{.99\textwidth}
+
+
+\begin{document}
+\SweaveOpts{concordance=TRUE}
+
+\title{Практикум по Microarrays}
+\maketitle
+
+\section{Задание}
+
+Необходимо выполнить манипуляции с данными об исследовании экспрессии генов на основании статьи Hyun Goo Woo et al. "Identification of a Cholangiocarcinoma-Like Gene Expression Trait in Hepatocellular Carcinoma" [1].
+
+Авторы работы рассматривают основные виды рака печени у взрослых (HCC - Hepatocellular carcinoma и CC - сholangiocarcinoma). Утверждается, что существует комбинированное заболевание, которое предполагает фенотипическое пересечение между этими опухолями. Авторы статьи применили интегративный онкогеномный подход для клинических и функциональных последствий для комбинированного типа опухолей. Было выполнено исследование, посвещенное экспрессии генов. 
+
+В данной работе необходимо провести похожие исследования с рассмотренными в статье данными:
+
+\begin{enumerate}
+\item Загрузить данные для анализа (Affymetrix) из открытых источников: \href{https://www.ebi.ac.uk/arrayexpress/experiments/E-GEOD-15765/}{ArrayExpress} и \href{https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE15765}{GEO} для E-GEOD-15765;
+\item Оценить данные, отсеить выборсы, произвести нормализацию;
+\item Выполнить поиск дифференциально экспрессирующихся генов;
+\item Провести кластеризацию профилей дифференциально экспрессирующихся генов, построить тепловые карты;
+\item Проанализировать обогащённость генов метаболическими путями из баз данных GO, KEGG и Reactome;
+\item Сделать выводы.
+\end{enumerate}
+
+\section{Решение}
+\subsection{Загрузка данных}
+Вначале загрузим необходимые библиотеки:
+<<cache=T>>=
+library(ArrayExpress)
+library(oligo)
+library(limma)
+library(AnnotationDbi)
+library(reactome.db)
+setwd("C:/microarrayslab")
+@
+
+Теперь загрузим сами данные.
+<<cache=T, results=hide>>=
+#geod15765 <- getAE("E-GEOD-15765", type = "full")
+#save(geod15765, file="geod15765.RData")
+load("geod15765.RData")
+aeset <- ae2bioc(mageFiles = geod15765) # A-AFFY-37
+@
+
+Далее необходимо посмотреть, какие факторы поставлены в соответствие образцам. Это именно те факторы, которые должны присутствовать в анализе.
+
+<<cache=T>>=
+colnames1 <- colnames(phenoData(aeset))
+fac <- colnames1[grep("Factor", colnames1)]
+fac
+@
+
+Фактор получился всего один - он отвечает за тип злокачественного новообразования. Теперь посмотрим на данные, которые соответствуют этому фактору.
+
+<<cache=T>>=
+groups <- phenoData(aeset)[, fac]
+head(pData(groups))
+@
+
+\subsection{Проверка качества данных}
+
+Для проверки качества данных построим модель данных. 
+
+<<cache=T>>=
+dataPLM <- fitProbeLevelModel(aeset)
+@
+
+Затем посмотрим на графики контроля качества для массивов Affymetrix: NUSE показывает нормализованные немасштабированные стандартные ошибки, а RLE показывает относительные значения логарифма значений экспрессии.  
+Итак, вначале рассмотрим NUSE:
+
+<<cache=T>>=
+nuse <- NUSE(dataPLM, type="stats")
+nuse[, 1:5]
+@
+
+<<cache=T, results=hide>>=
+png("NUSE.png", width = 720)
+par(mar=c(8, 4.1, 4.1, 2.1))
+NUSE(dataPLM, las = 2)
+dev.off()
+@
+
+
+\begin{figure}[H]
+\centering
+\centerline{\includegraphics{NUSE.png}}
+\caption{NUSE-plot}
+\end{figure}
+
+Аналогично рассмотрим RLE:
+
+<<cache=T>>=
+rle <- RLE(dataPLM, type = "stats")
+rle[, 1:5]
+@
+
+Выведем боксплоты:
+
+<<cache=T, results=hide>>=
+png("RLE.png", width = 720)
+par(mar=c(8, 4.1, 4.1, 2.1))
+RLE(dataPLM, las = 2)
+dev.off()
+@
+
+\begin{figure}[H]
+\centering
+\centerline{\includegraphics{RLE.png}}
+\caption{RLE-plot}
+\end{figure}
+
+По обоим графикам видим выбросы для следующих данных:
+
+\begin{center}
+\begin{tabular}{|c|c|}
+\hline
+  Название & Номер в массиве \\ [0.5ex]
+  \hline\hline
+   GSM395733.CEL & 22 \\
+   \hline
+   GSM395727.CEL & 31 \\
+   \hline
+   GSM395736.CEL & 41 \\
+   \hline
+   GSM395714.CEL & 45 \\
+   \hline
+   GSM395731.CEL & 49 \\
+   \hline
+   GSM395732.CEL & 55 \\
+   \hline
+   GSM395737.CEL & 57 \\
+   \hline
+   GSM395734.CEL & 70 \\
+   \hline
+   GSM395721.CEL & 74 \\
+   \hline
+   GSM395724.CEL & 89 \\
+   \hline
+\end{tabular}
+\end{center}
+
+Уберем выбросы из дальнейшего рассмотрения. 
+
+<<cache=T>>=
+extremes <- c(22, 31, 41, 45, 49, 55, 57, 70, 74, 89)
+new_aeset <- aeset[, -extremes]
+new_groups <- groups[-extremes, ]
+@
+
+Теперь отнормируем данные и построим MA-plots для исходных и нормированных данных для случайно выбранных экземпляров.
+
+<<cache=T, results=hide>>=
+normed_new_aeset <- rma(new_aeset)
+
+arrays <- c(16, 32, 48, 64, 80)
+for (a in arrays)
+{
+  png(paste("Original, №", a, ".png", sep=""), width = 720)
+  MAplot(new_aeset, which = a, main = "Original data")
+  dev.off()
+  png(paste("Normed, №", a, ".png", sep=""), width = 720)
+  MAplot(normed_new_aeset, which = a, main = "Normalized")
+  dev.off()
+}
+@
+
+\setlength\headheight{10pt}
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}{.5\textwidth}
+        \centering
+        \includegraphics{Original, №16.png}
+        \caption{Экземпляр №16, исходные данные}
+    \end{subfigure}%
+    \begin{subfigure}{.5\textwidth}
+        \centering
+        \includegraphics{Normed, №16.png}
+        \caption{Экземпляр №16, нормированные данные}
+    \end{subfigure}
+    \begin{subfigure}{.5\textwidth}
+        \centering
+        \includegraphics{Original, №32.png}
+        \caption{Экземпляр №32, исходные данные}
+    \end{subfigure}%
+    \begin{subfigure}{.5\textwidth}
+        \centering
+        \includegraphics{Normed, №32.png}
+        \caption{Экземпляр №32, нормированные данные}
+    \end{subfigure}
+\caption{MA-plots, ч.1}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+      \begin{subfigure}{.5\textwidth}
+        \centering
+        \includegraphics{Original, №48.png}
+        \caption{Экземпляр №48, исходные данные}
+    \end{subfigure}%
+    \begin{subfigure}{.5\textwidth}
+        \centering
+        \includegraphics{Normed, №48.png}
+        \caption{Экземпляр №48, нормированные данные}
+    \end{subfigure}
+    \begin{subfigure}{.5\textwidth}
+        \centering
+        \includegraphics{Original, №64.png}
+        \caption{Экземпляр №64, исходные данные}
+    \end{subfigure}%
+    \begin{subfigure}{.5\textwidth}
+        \centering
+        \includegraphics{Normed, №64.png}
+        \caption{Экземпляр №64, нормированные данные}
+    \end{subfigure}
+    \begin{subfigure}{.5\textwidth}
+        \centering
+        \includegraphics{Original, №80.png}
+        \caption{Экземпляр №80, исходные данные}
+    \end{subfigure}%
+    \begin{subfigure}{.5\textwidth}
+        \centering
+        \includegraphics{Normed, №80.png}
+        \caption{Экземпляр №80, нормированные данные}
+    \end{subfigure}
+    \caption{MA-plots, ч.2}
+\end{figure}
+
+\subsection{Исследование дифференциальной экспрессии}
+
+Создадим матрицу дизайна и переименуем столбики, чтобы было короче:
+\begin{itemize}
+\item cholangiocarcinoma $\rightarrow$ cc
+\item combined hepatocellular carcinoma and cholangiocarcinoma $\rightarrow$ hc\_cc, \item hepatocellular carcinoma $\rightarrow$ hc
+\end{itemize}
+
+<<cache=T>>=
+factorname <- factor(new_groups$Factor.Value..TISSUE.)
+designmat <- model.matrix(~0 + factorname)
+
+colnames(designmat) <- c("cc", "hc_cc", "hc")
+head(designmat)
+
+print(is.fullrank(designmat))
+@
+
+Также создадим матрицу контраста:
+<<cache=T>>=
+contrmat <- makeContrasts(hc_cc - cc, hc_cc - hc, levels = designmat)
+head(contrmat)
+
+print(is.fullrank(contrmat))
+@
+
+Теперь проведем анализ с помощью `eBayes`: обучим модели и вычислим набор статистик, чтобы понять зависимость факторов от профилей экспрессии.
+
+<<cache=T>>=
+fitted <- lmFit(normed_new_aeset, designmat)
+contrfit <- contrasts.fit(fitted, contrmat)
+new_fitted <- eBayes(contrfit)
+head(new_fitted$coefficients)
+@
+
+Нарисуем графики-вулканы для разных коэффициентов:
+
+<<cache = T, results=hide>>=
+png("volcano1.png", height = 720)
+volcanoplot(new_fitted, coef = "hc_cc - cc", highlight = 15)
+dev.off()
+png("volcano2.png", height = 720)
+volcanoplot(new_fitted, coef = "hc_cc - hc", highlight = 15)
+dev.off()
+@
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}{.5\textwidth}
+        \centering
+        \includegraphics{volcano1.png}
+        \caption{hc\_cc-cc case}
+    \end{subfigure}%
+    \begin{subfigure}{.5\textwidth}
+        \centering
+        \includegraphics{volcano2.png}
+        \caption{hc\_cc-hc case}
+    \end{subfigure}
+\caption{Volcano plots}
+\end{figure}
+
+Теперь отфильтруем гены по p-value сверхпредставленности: для первого случая $p_{val} = 0.05$, для второго - $0.001$ (по информации статьи). Также отрисуем тепловые карты профилей тех генов, которые по результатам фильтрации будут признаны дифференциально экспрессирующимися.
+
+<<cache=T>>=
+p_thresh_1 = 0.05
+
+res1 <- topTable(new_fitted, coef = "hc_cc - cc", number = nrow(normed_new_aeset))
+filtered_res1 <- res1[res1$adj.P.Val < p_thresh_1, ]
+
+head(filtered_res1)
+
+
+p_thresh_2 = 0.001
+
+res2 <- topTable(new_fitted, coef = "hc_cc - hc", number = nrow(normed_new_aeset))
+filtered_res2 <- res2[res2$adj.P.Val < p_thresh_2, ]
+
+head(filtered_res2)
+@
+
+Посмотрим, какое количество проб разных категорий получилось:
+
+<<cache=T>>=
+hc_cc_cc <- c(nrow(filtered_res1), nrow(filtered_res1[filtered_res1$logFC <= 0, ]), 
+              nrow(filtered_res1[filtered_res1$logFC > 0, ]))
+
+hc_cc_hc <- c(nrow(filtered_res2), nrow(filtered_res2[filtered_res2$logFC <= 0, ]), 
+              nrow(filtered_res2[filtered_res2$logFC > 0, ]))
+
+resframe <- rbind(hc_cc_cc, hc_cc_hc)
+colnames(resframe) <- c("total", "<=0", ">0")
+resframe
+@
+
+Отрисуем heatmaps:
+
+<<cache=T, results = hide>>=
+res1_rownames <- rownames(filtered_res1)
+res2_rownames <- rownames(filtered_res2)
+
+hmap1 <- exprs(normed_new_aeset[res1_rownames, ])
+colnames(hmap1) <- unlist(pData(new_groups)[1])
+colnames(hmap1)[colnames(hmap1) == 
+                  "combined hepatocellular carcinoma and cholangiocarcinoma"] <-"combined"
+png("heatmap1.png", width = 1080, height = 1080)
+heatmap(hmap1, margins = c(10, 10))
+dev.off()
+
+hmap2 <- exprs(normed_new_aeset[res2_rownames, ])
+colnames(hmap2) <- unlist(pData(new_groups)[1])
+colnames(hmap2)[colnames(hmap2) == 
+                  "combined hepatocellular carcinoma and cholangiocarcinoma"] <-"combined"
+png("heatmap2.png", width = 1080, height = 1080)
+heatmap(hmap2, margins = c(10, 10))
+dev.off()
+@
+
+\begin{figure}[H]
+\centering
+\centerline{\includegraphics{heatmap1.png}}
+\caption{Heatmap case 1: hc\_cc-cc}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\centerline{\includegraphics{heatmap2.png}}
+\caption{Heatmap case 2: hc\_cc-hc}
+\end{figure}
+
+\subsection{Анализ обогащенности}
+
+Сохраним данные о генах, признанных дифференциально экспрессирующимися, для последующего анализа в онлайн-утилите \href{https://david.ncifcrf.gov/tools.jsp}{DAVID}.
+
+<<cache=T>>=
+write(rownames(res1), file = 'background1.txt')
+write(rownames(filtered_res1), file = "genes1.txt")
+write(rownames(res2), file = 'background2.txt')
+write(rownames(filtered_res2), file = "genes2.txt")
+@
+
+Далее будем проводить анализ обогащенности путями KEGG, Reactome и GO. 
+
+Для этого выполним следующие действия: 
+
+\begin{enumerate}
+\item Перейдем во вкладку "Upload" в левой части сайта. На первом шаге загрузим файл `genes1.txt`. На втором шаге выберем формат `AFFYMETRIX\_3PRIME\_IVT\_ID`. На третьем шаге выберем `Gene List`. Нажмем `Submit`.
+\item Вернемся на вкладку `Upload` и повторим ту же процедуру с файлом `background.txt`, на третьем шаге укажем его как `Background`.
+\item Выберем `Functional Annotation Tool` в правой части страницы. В открывшемся меню выберем Gene Ontology: GOTERM\_BP\_DIRECT, GOTERM\_CC\_DIRECT, GOTERM\_MF\_DIRECT; Pathways: KEGG\_PATHWAY, REACTOME\_PATHWAY. Выберем `Functional Annotation Chart`.
+\item Скачаем открывшуюся таблицу по ссылке справа - `Download File`. Сохраним файл как `ALL\_res1.txt`.
+\item Аналогичную процедуру проделаем для файлов `genes2.txt` и `background2.txt`.
+\end{enumerate}
+
+Теперь загрузим результаты для дальнейшего анализа.
+
+<<cache=T>>=
+res1_david <- read.table("ALL_res1.txt", sep = "\t", header = T)
+res1_david$Genes <- NULL
+res2_david <- read.table("ALL_res2.txt", sep = "\t", header = T)
+res2_david$Genes <- NULL
+@
+
+Для кейса №1 в статье указано, что CC-обогащение связно с функциями развития или дифференцировки, а также с метастазами/адгезией. Выделим такие результаты среди экземпляров в загруженном файле.
+
+<<cache=T>>=
+match1 <- c("develop", "differ", "metastas", "adh")
+
+matched_res1 <- res1_david[grep(paste(match1, collapse = "|"), res1_david$Term), ]
+matched_res1[, c("Term", "PValue", "FDR")]
+@
+
+Отдельно посмотрим на результаты пути Reactome (поскольку короткого описания для таких путей не представлено):
+
+<<cache=T>>=
+react_annotations1 <- select(reactome.db, 
+                             gsub(":.*","", 
+                                  res1_david[res1_david$Category == 
+                                               "REACTOME_PATHWAY", ]$Term),
+       keytype = "PATHID",
+       c("PATHNAME"))
+react_annotations1 <- react_annotations1[complete.cases(react_annotations1), ]
+react_annotations1$PATHNAME <- tolower(react_annotations1$PATHNAME)
+
+matched_res1_react <- react_annotations1[grep(paste(match1, collapse = "|"), 
+                                              react_annotations1$PATHNAME),]
+matched_res1_react # результатов не нашлось...
+@
+
+Аналогичную процедуру проведем со вторым файлом. В данном случае для HCC обогащенность наиболее проявляется в функциях, связанных с метаболизмом и иммунитетом.
+
+<<cache=T>>=
+match2 <- c("metabolism", "immun")
+
+matched_res2 <- res2_david[grep(paste(match2, collapse = "|"), res2_david$Term), ]
+matched_res2[, c("Term", "PValue", "FDR")]
+@
+
+Отдельно рассмотрим Reactome:
+
+<<cache=T>>=
+react_annotations2 <- select(reactome.db, 
+                             gsub(":.*","", 
+                                  res2_david[res2_david$Category == 
+                                               "REACTOME_PATHWAY", ]$Term),
+                            keytype = "PATHID",
+                            c("PATHNAME"))
+react_annotations2 <- react_annotations2[complete.cases(react_annotations2), ]
+react_annotations2$PATHNAME <- tolower(react_annotations2$PATHNAME)
+
+matched_res2_react <- react_annotations2[grep(paste(match2, collapse = "|"), 
+                                              react_annotations2$PATHNAME),]
+matched_res2_react
+@
+
+Выведем более подробную информацию:
+
+<<cache=T>>=
+res2_david[res2_david$Term == paste(matched_res2_react$PATHID, 
+                                    matched_res2_react$PATHID, sep=":"), ]
+@
+
+Рассмотрим отдельно ген TP53, упомянутый в статье. Скачаем все связанные с ним \href{https://www.ensembl.org/Homo_sapiens/Gene/Ontologies/biological_process?g=ENSG00000141510;r=17:7661779-7687538}{GO-пути} и посмотрим, нашли ли мы что-то похожее.
+
+<<cache=T>>=
+TP53 <- read.csv("TP53.csv", header = T)
+TP53_GO <- TP53$Accession
+
+rbind(res1_david[substring(res1_david$Term, 1, 10) %in% TP53_GO, ],
+res2_david[substring(res2_david$Term, 1, 10) %in% TP53_GO, ])[, c("Term", "PValue")]
+@
+
+\section{Выводы}
+
+Итак, мы рассмотрели анализ дифференциальной экспрессии генов и провели анализ обогащенности, а также построили тепловые карты, которые, как и предполагалось авторами статьи, практически не показывают больших различий между комбинированным вариантом опухоли и отдельно взятыми CC и HCC.
+
+Также мы получили 8 дифференциально экспрессируемых обогащенных путей для CC (из баз GO и KEGG), на типах которых делался акцент в статье. Все эти образцы имеют скорректированный p-value меньше $0.1$. Для HCC был получен только один путь в базы Reactome, имеющий значение $p-value \approx 0.02$.
+
+Отдельно был рассмотрен ген TP53, который указан авторами как значительно обогащенный ($p < 0.036$). Авторы подчеркнули, что TP53 может играть ключевую роль в развитии СLHCC - CC signature-expressing HCC. Известно также, что мутации гена TP53 присутствуют при многих типах рака. В нашем исследовании мы также нашли несколько путей GO, имеющих связь с этим геном:
+\begin{itemize}
+\item GO:0060333~interferon-gamma-mediated signaling pathway
+\item GO:0012501~programmed cell death
+\item GO:0042493~response to drug
+\end{itemize}
+
+\begin{thebibliography}{9}
+    \bibitem{HyunGooWoo} Hyun Goo Woo, Jeong-Hoon Lee, Jung-Hwan Yoon, Chung Yong Kim, Hyo-Suk Lee, Ja June Jang, Nam-Joon Yi, Kyung-Suk Suh, Kuhn Uk Lee, Eun Sung Park, Snorri S. "Thorgeirsson and Yoon Jun Kim Identification of a Cholangiocarcinoma-Like Gene Expression Trait in Hepatocellular Carcinoma" (2010). | doi: \href{https://doi.org/10.1158/0008-5472.can-09-2823}{10.1158/0008-5472.CAN-09-2823}
+\end{thebibliography}
+
+\end{document}
